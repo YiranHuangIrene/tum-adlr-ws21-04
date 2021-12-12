@@ -62,7 +62,7 @@ def main(args):
         'n_updates_per_epoch': 10,
         'total_epochs':2000,
         'state_norm':False,
-        'continuous':False,
+        'continuous':args.continuous,
         'gamma': 0.995,
         'lamda': 0.97,
         'lr': 5e-4,
