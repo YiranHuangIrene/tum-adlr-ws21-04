@@ -1,6 +1,7 @@
 from collections import namedtuple
 import torch
 import numpy as np
+from collections import OrderedDict
 
 Transition = namedtuple('Transition', ('state', 'value', 'action', 'logproba', 'mask', 'next_state', 'reward'))
 
@@ -68,17 +69,27 @@ class Normalization():
 class Memory():
     def __init__(self):
         self.memory = []
-
     def push(self, *args):
         self.memory.append(Transition(*args))
-
+    def clear(self):
+        self.memory = []
     def sample(self):
-        return Transition(*zip(*self.memory))  # zip each dimension(each dimension contains each runs)
+        return Transition(*zip(*self.memory))  # zip each dimension(each dimension contains each runs) (state = (1,2,3,4,5..), action = (1,2,3,4,5..))
+
 
     def __len__(self):
         return len(self.memory)
 
-
+def update_init_params(target, old, step_size = 0.1):
+    """Apply one step of gradient descent on the loss function `loss`, with
+    step-size `step_size`, and returns the updated parameters of the neural
+    meta_policy.
+    """
+    updated = OrderedDict()
+    for ((name_old, oldp), (name_target, targetp)) in zip(old.items(), target.items()):
+        assert name_old == name_target, "target and old params are different"
+        updated[name_old] = oldp + step_size * (targetp - oldp) # grad ascent so its a plus
+    return updated
 if __name__ == '__main__':
     mean = 0
     count =0

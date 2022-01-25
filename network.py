@@ -63,7 +63,11 @@ class ActorCritic(nn.Module):
         x = torch.tanh(self.critic_fc2(x))
         critic_value = self.critic_fc3(x)
         return critic_value
-
+    def evaluate(self,states,actions):
+        logprobas = self.get_logproba(states,actions)
+        values = self._forward_critic(states).flatten()
+        loss_entropy = torch.mean(torch.exp(logprobas) * logprobas)
+        return logprobas,values,loss_entropy
     def sample_action(self, action_mean, action_std=None):
         if self.continuous:
             dist = MultivariateNormal(action_mean, action_std)

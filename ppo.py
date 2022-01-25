@@ -6,12 +6,11 @@ import gym
 from network import ActorCritic
 from utils import *
 from datetime import datetime
-import tensorboard
 from torch.utils.tensorboard import SummaryWriter
 
 
 class PPO:
-    def __init__(self, policy_class, env, **hyperparameters):
+    def __init__(self, policy, env, **hyperparameters):
 
         # self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self._init_hyperparameters(hyperparameters)
@@ -22,7 +21,7 @@ class PPO:
         else:
             self.act_dim = env.action_space.n
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.network = policy_class(self.obs_dim, self.act_dim,continuous = self.continuous, layer_norm=self.layer_norm).to(self.device)
+        self.network = policy
 
         self.logger = {
             'delta_t': time.time_ns(),
@@ -30,12 +29,11 @@ class PPO:
             'epoch_so_far': 0,  # iterations so far
             'batch_lens': [],  # episodic lengths in batch
             'batch_rews': [],  # episodic returns in batch
-            'total_losses': [],  # losses of actor network in current iteration
             'mean': 0,  # mean of observation
             'std': 0,  # std of observation
         }
         TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-        self.writer = SummaryWriter('runs/' + TIMESTAMP)
+        self.writer = SummaryWriter('runs/test/maml_' + TIMESTAMP)
 
     def _init_hyperparameters(self, hyperparameters):
         # Default values for hyperparameters
@@ -71,9 +69,6 @@ class PPO:
                 state = nor_std(state)
             reward_sum = 0
             for t in range(self.max_timesteps_per_episode):
-                if epoch % 10 == 0 and self.render and len(
-                        len_list) == 0:  # the first try of each epoch, we visualize it
-                    self.env.render()
                 t += 1
                 if continuous:
                     action_mean, action_std, value = self.network(torch.tensor(state, device=self.device).float())
@@ -178,7 +173,6 @@ class PPO:
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
-                self.logger['total_losses'].append(total_loss.detach().cpu())
 
             if self.schedule_clip == 'linear':
                 ep_ratio = 1 - (epoch / self.total_epochs)
@@ -189,7 +183,7 @@ class PPO:
                 for g in optimizer.param_groups:
                     g['lr'] = lr_now
             self._log_summary()
-            torch.save(self.network.state_dict(), './actor_critic.pth')
+            torch.save(self.network.state_dict(), 'model/actor_critic_maml.pth')
 
     def _log_summary(self):
         delta_t = self.logger['delta_t']
@@ -201,19 +195,15 @@ class PPO:
         epoch_so_far = self.logger['epoch_so_far']
         avg_ep_lens = np.mean(self.logger['batch_lens'])
         avg_ep_rews = np.mean(self.logger['batch_rews'])
-        avg_total_loss = np.mean([losses.float() for losses in self.logger['total_losses']])
-        self.writer.add_scalar('Training loss', avg_total_loss, global_steps)
         self.writer.add_scalar('Average_rewards', avg_ep_rews, global_steps)
         avg_ep_lens = str(round(avg_ep_lens, 2))
         avg_ep_rews = str(round(avg_ep_rews, 2))
-        avg_total_loss = str(round(avg_total_loss, 5))
 
         # Print logging statements
         print(flush=True)
         print(f"-------------------- Epoch #{epoch_so_far} --------------------", flush=True)
         print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
         print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
-        print(f"Average Loss: {avg_total_loss}", flush=True)
         print(f"Timesteps So Far: {global_steps}", flush=True)
         print(f"Epoch took: {delta_t} secs", flush=True)
         print(f"------------------------------------------------------", flush=True)
@@ -221,4 +211,3 @@ class PPO:
 
         self.logger['batch_lens'] = []
         self.logger['batch_rews'] = []
-        self.logger['total_losses'] = []
