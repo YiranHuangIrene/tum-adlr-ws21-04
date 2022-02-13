@@ -152,7 +152,7 @@ def main(args):
             checkpoint = torch.load(args.checkpoint)
             policy.load_state_dict(checkpoint)
             print('successfully load model!')
-            mode = 'meta_train'
+            mode = 'combined_train'
         else:
             print('train from new model!')
         ppo = PPO(policy, env, mode, args.save_name, **hyperparameters)
