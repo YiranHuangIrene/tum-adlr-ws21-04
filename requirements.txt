@@ -1,0 +1,11 @@
+baselines==0.1.5
+gym==0.21.0
+higher==0.2.1
+keras==2.8.0
+matplotlib==3.5.1
+numpy==1.21.2
+pybullet==3.2.1
+rl==3.0
+scipy==1.8.0
+setuptools==58.0.4
+torch==1.10.2
