@@ -48,8 +48,8 @@ class ActorCritic(nn.Module):
             return action_prob, critic_value
 
     def _forward_actor(self, states):
-        x = torch.tanh(self.actor_fc1(states))
-        x = torch.tanh(self.actor_fc2(x))
+        x = F.relu(self.actor_fc1(states))
+        x = F.relu(self.actor_fc2(x))
         if self.continuous:
             action_mean = self.actor_fc3(x)
             action_std = self.cov_mat
@@ -59,8 +59,8 @@ class ActorCritic(nn.Module):
             return action_prob
 
     def _forward_critic(self, states):
-        x = torch.tanh(self.critic_fc1(states))
-        x = torch.tanh(self.critic_fc2(x))
+        x = F.relu(self.critic_fc1(states))
+        x = F.relu(self.critic_fc2(x))
         critic_value = self.critic_fc3(x)
         return critic_value
     def evaluate(self,states,actions):

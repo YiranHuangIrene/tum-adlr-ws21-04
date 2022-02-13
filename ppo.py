@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class PPO:
-    def __init__(self, policy, env, **hyperparameters):
+    def __init__(self, policy, env, mode,save_name, **hyperparameters):
 
         # self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self._init_hyperparameters(hyperparameters)
@@ -20,9 +20,11 @@ class PPO:
             self.act_dim = env.action_space.shape[0]
         else:
             self.act_dim = env.action_space.n
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.network = policy
-
+        #self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = 'cpu'
+        self.network = policy.to(self.device)
+        self.mode = mode
+        self.save_name = save_name
         self.logger = {
             'delta_t': time.time_ns(),
             't_so_far': 0,  # timesteps so far
@@ -33,7 +35,10 @@ class PPO:
             'std': 0,  # std of observation
         }
         TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-        self.writer = SummaryWriter('runs/test/maml_' + TIMESTAMP)
+        if self.mode == 'combined_train':
+            self.writer = SummaryWriter('runs/combined_train/' + self.save_name + '_' + TIMESTAMP)
+        if self.mode == 'ppo_train':
+            self.writer = SummaryWriter('runs/ppo_train/' + self.save_name + '_' + TIMESTAMP)
 
     def _init_hyperparameters(self, hyperparameters):
         # Default values for hyperparameters
@@ -43,9 +48,8 @@ class PPO:
         self.mini_batch_size = 256
         self.gamma = 0.995  # discounted factor
         self.lamda = 0.97  # advantages factor
-        self.n_updates_per_epoch = 10
         self.clip = 0.2
-        self.lr = 1e-3
+        self.lr = 3e-4
         # Miscellaneous parameters
         self.render = True
         self.seed = None
@@ -106,6 +110,8 @@ class PPO:
         batch_size = len(memory)
 
         rewards = torch.tensor(batch.reward, device=self.device)
+        # normalize rewards:
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-9)
         values = torch.tensor(batch.value, device=self.device)
         masks = torch.tensor(batch.mask, device=self.device)
         actions = torch.tensor(np.array(batch.action), device=self.device)
@@ -149,7 +155,7 @@ class PPO:
             if self.advantage_norm:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
 
-            for i_epoch in range(int(self.n_updates_per_epoch * batch_size / self.mini_batch_size)):
+            for i_epoch in range(int(batch_size / self.mini_batch_size)):
                 minibatch_ind = np.random.choice(batch_size, self.mini_batch_size, replace=False)
                 minibatch_states = states[minibatch_ind].float()
                 minibatch_actions = actions[minibatch_ind].float()
@@ -183,7 +189,11 @@ class PPO:
                 for g in optimizer.param_groups:
                     g['lr'] = lr_now
             self._log_summary()
-            torch.save(self.network.state_dict(), 'model/actor_critic_maml.pth')
+            if self.mode == 'combined_train':
+                torch.save(self.network.state_dict(), 'model/combined_model/' + self.save_name + '_actor_critic.pth')
+            if self.mode == 'ppo_train':
+                torch.save(self.network.state_dict(), 'model/direct_model/' + self.save_name + '_actor_critic.pth')
+
 
     def _log_summary(self):
         delta_t = self.logger['delta_t']
@@ -211,3 +221,6 @@ class PPO:
 
         self.logger['batch_lens'] = []
         self.logger['batch_rews'] = []
+
+
+

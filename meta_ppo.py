@@ -1,15 +1,8 @@
-import higher
-import torch
-from torch.distributions import MultivariateNormal
-import numpy as np
-import time
-import gym
-from network import ActorCritic
 from typing import List
+
+import higher
+
 from utils import *
-from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
-import copy
 
 
 def gradadd(grads1: List[torch.Tensor], grads2: List[torch.Tensor]):
@@ -29,9 +22,12 @@ class MetaPPo:
             self.act_dim = env.action_space.shape[0]
         else:
             self.act_dim = env.action_space.n
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.meta_policy = meta_policy
-        self.fmeta_policy = copy.deepcopy(self.meta_policy)
+        #self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = 'cpu'
+        print(f"using {self.device}!")
+        # self.device = 'cpu'
+        self.meta_policy = meta_policy.to(self.device)
+        # self.fmeta_policy = copy.deepcopy(self.meta_policy)
         # self.logger = {
         #     'delta_t': time.time_ns(),
         #     't_so_far': 0,  # timesteps so far
@@ -73,7 +69,7 @@ class MetaPPo:
 
     def rollout(self, memory, reward_list, continuous, temp_policy=None):
         """
-        In this function, we want to generate K episodes using the original meta_policy or using the fmeta_policy
+        we spend most of our time on this function
         """
         # collect K episodes
         for episode in range(self.K):
@@ -83,30 +79,28 @@ class MetaPPo:
             reward_sum = 0
             for t in range(self.max_timesteps_per_episode):
                 t += 1
-                if temp_policy != None:
-                    if continuous:
-                        action_mean, action_std, value = temp_policy(
-                            torch.tensor(state, device=self.device).float())
-                        action, logproba = temp_policy.sample_action(action_mean, action_std)
-                        action = action.detach().cpu().numpy()
-                        logproba = np.float32(logproba.detach().cpu())
-                    else:
-                        action_prob, value = temp_policy(torch.tensor(state, device=self.device).float())
-                        action, logproba = temp_policy.sample_action(action_prob)
-                        action = action.detach().cpu().numpy()
-                        logproba = np.float32(logproba.detach().cpu())
+                # if temp_policy != None:
+                if continuous:
+                    action_mean, action_std, value = temp_policy(torch.tensor(state, device=self.device).float())
+                    action, logproba = temp_policy.sample_action(action_mean, action_std)
+                    action = action.detach().cpu().numpy()
+                    logproba = np.float32(logproba.detach().cpu())
                 else:
-                    if continuous:
-                        action_mean, action_std, value = self.fmeta_policy(
-                            torch.tensor(state, device=self.device).float())
-                        action, logproba = self.fmeta_policy.sample_action(action_mean, action_std)
-                        action = action.detach().cpu().numpy()
-                        logproba = np.float32(logproba.detach().cpu())
-                    else:
-                        action_prob, value = self.fmeta_policy(torch.tensor(state, device=self.device).float())
-                        action, logproba = self.fmeta_policy.sample_action(action_prob)
-                        action = action.detach().cpu().numpy()
-                        logproba = np.float32(logproba.detach().cpu())
+                    action_prob, value = temp_policy(torch.tensor(state, device=self.device).float())
+                    action, logproba = temp_policy.sample_action(action_prob)
+                    action = action.detach().cpu().numpy()
+                    logproba = np.float32(logproba.detach().cpu())
+                # else:
+                #     if continuous:
+                #         action_mean, action_std, value = self.fmeta_policy(state)
+                #         action, logproba = self.fmeta_policy.sample_action(action_mean, action_std)
+                #         action = action.detach().cpu().numpy()
+                #         logproba = np.float32(logproba.detach().cpu())
+                #     else:
+                #         action_prob, value = self.fmeta_policy(state)
+                #         action, logproba = self.fmeta_policy.sample_action(action_prob)
+                #         action = action.detach().cpu().numpy()
+                #         logproba = np.float32(logproba.detach().cpu())
                 next_state, reward, done, _ = self.env.step(action)
                 reward_sum += reward
                 # if self.state_norm:
@@ -142,6 +136,157 @@ class MetaPPo:
         deltas = torch.Tensor(batch_size).to(self.device)
         advantages = torch.Tensor(batch_size).to(self.device)
         return rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size
+
+    def meta_learn(self):
+        """
+        In this function, we use the episode we collect to update our fmeta_policy / return grads for update(on validation step)
+        one step of adaptation
+        :return:
+        """
+        optimizer = torch.optim.SGD(self.meta_policy.parameters(),
+                                    lr=self.lr)  # each learn step, we re-initialize the optimizer
+        nor_std = Normalization((self.obs_dim,), clip=10.0)  # TODO: right now we don't use nor_std
+        continuous = self.meta_policy.continuous
+        clip_now = self.clip
+        # step1: perform current policy to collect trajectories
+        # self.logger['epoch_so_far'] = epoch + 1
+        # self.logger['t_so_far'] = global_steps
+
+        # first iteration: collect K iteration and use it to update fmeta_policy
+        # second iteration: collect K iteration to validation fmeta_policy. i.e. one more update step but return grad
+        # collect K episodes from fmeta_policy
+        # create an empty memory
+        print(f"collecting k episodes for updating fmeta_policy")
+        with higher.innerloop_ctx(self.meta_policy, optimizer, copy_initial_weights=False) as (fmeta_policy, diffopt):
+            for n_adapt in range(self.N):
+                print(f"updating fmeta policy {n_adapt + 1}/{self.N}")
+                memory = Memory()
+                # create reward list for this roolout
+                reward_list = []  # this reward_list seems to be useless
+                print(f"collecting K rollouts!")
+                rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size = self.rollout(
+                    memory, reward_list, continuous, temp_policy=fmeta_policy)  # also collect it from fmeta_policy
+                print(f"calculating losses!")
+                prev_return = 0
+                prev_value = 0
+                prev_advantage = 0
+                # calculate advantages
+                for i in reversed(range(batch_size)):
+                    returns[i] = rewards[i] + self.gamma * prev_return * masks[i]
+                    deltas[i] = rewards[i] + self.gamma * prev_value * masks[i] - values[i]
+                    advantages[i] = deltas[i] + self.gamma * self.lamda * prev_advantage * masks[i]
+                    prev_return = returns[i]
+                    prev_value = values[i]
+                    prev_advantage = advantages[i]
+                if self.advantage_norm:
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
+                for i_epoch in range(int(batch_size / self.mini_batch_size)):
+                    minibatch_ind = np.random.choice(batch_size, self.mini_batch_size, replace=False)
+                    minibatch_states = states[minibatch_ind].float()
+                    minibatch_actions = actions[minibatch_ind].float()
+                    minibatch_oldlogproba = oldlogproba[minibatch_ind]
+                    minibatch_advantages = advantages[minibatch_ind]
+                    minibatch_returns = returns[minibatch_ind]
+                    minibatch_newlogproba, minibatch_newvalues, loss_entropy = fmeta_policy.evaluate(
+                        minibatch_states, minibatch_actions)  # probably need to set to self.fmeta_policy
+                    ratio = torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
+                    surr1 = ratio * minibatch_advantages
+                    surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages
+                    loss_surr = -torch.mean(torch.min(surr1, surr2))
+                    if self.lossvalue_norm:
+                        minibatch_return_6std = 6 * minibatch_returns.std()
+                        loss_value = torch.mean(
+                            (minibatch_newvalues - minibatch_returns).pow(2)) / minibatch_return_6std
+                    else:
+                        loss_value = torch.mean((minibatch_newvalues - minibatch_returns).pow(2))
+
+                    loss = loss_surr + self.loss_coeff_value * loss_value + self.loss_coeff_entropy * loss_entropy
+                    diffopt.step(loss)
+
+            print('validating fmeta_policy!')
+            memory = Memory()
+            # create reward list for this roolout
+            reward_list = []  # this reward_list seems to be useless
+            print("collecting K episodes from updated fmeta_policy")
+            rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size = self.rollout(
+                memory, reward_list, continuous, temp_policy=fmeta_policy)  # also collect it from fmeta_policy
+            print(f"the average_rewards of validation step is {np.mean(np.array(reward_list))}")
+            prev_return = 0
+            prev_value = 0
+            prev_advantage = 0
+            # calculate advantages
+            for i in reversed(range(batch_size)):
+                returns[i] = rewards[i] + self.gamma * prev_return * masks[i]
+                deltas[i] = rewards[i] + self.gamma * prev_value * masks[i] - values[i]
+                advantages[i] = deltas[i] + self.gamma * self.lamda * prev_advantage * masks[i]
+                prev_return = returns[i]
+                prev_value = values[i]
+                prev_advantage = advantages[i]
+            if self.advantage_norm:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
+
+            print("updating fmeta_policy")
+            newlogproba, newvalues, loss_entropy = fmeta_policy.evaluate(
+                states.float(), actions)  # probably need to set to self.fmeta_policy
+            ratio = torch.exp(newlogproba - oldlogproba)
+            surr1 = ratio * advantages
+            surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * advantages
+            loss_surr = -torch.mean(torch.min(surr1, surr2))
+            if self.lossvalue_norm:
+                return_6std = 6 * returns.std()
+                loss_value = torch.mean(
+                    (newvalues - returns).pow(2)) / return_6std
+            else:
+                loss_value = torch.mean((newvalues - returns).pow(2))
+
+            loss = loss_surr + self.loss_coeff_value * loss_value + self.loss_coeff_entropy * loss_entropy
+        return np.mean(np.array(reward_list)), loss
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     def maml_learn(self):
         """
@@ -280,7 +425,8 @@ class MetaPPo:
                         memory, reward_list, continuous)  # also collect it from fmeta_policy
                 else:
                     rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size = self.rollout(
-                        memory, reward_list, continuous, temp_policy=fmeta_policy)  # also collect it from fmeta_policy
+                        memory, reward_list, continuous,
+                        temp_policy=fmeta_policy)  # also collect it from fmeta_policy
                 print(f"the average_rewards of {n_adapt + 1} adaptation step is {np.mean(np.array(reward_list))}")
                 prev_return = 0
                 prev_value = 0
@@ -362,109 +508,6 @@ class MetaPPo:
                 torch.autograd.grad(loss, fmeta_policy.parameters(time=0)))
             print(f" the total loss of K validation episodes is: {loss.item()}")
         return np.mean(np.array(reward_list)), grad_wrt_original
-
-    def meta_learn(self):
-        """
-        In this function, we use the episode we collect to update our fmeta_policy / return grads for update(on validation step)
-        one step of adaptation
-        :return:
-        """
-        optimizer = torch.optim.SGD(self.meta_policy.parameters(),
-                                    lr=self.lr)  # each learn step, we re-initialize the optimizer
-        nor_std = Normalization((self.obs_dim,), clip=10.0)  # TODO: right now we don't use nor_std
-        continuous = self.meta_policy.continuous
-        clip_now = self.clip
-        # step1: perform current policy to collect trajectories
-        # self.logger['epoch_so_far'] = epoch + 1
-        # self.logger['t_so_far'] = global_steps
-
-        # first iteration: collect K iteration and use it to update fmeta_policy
-        # second iteration: collect K iteration to validation fmeta_policy. i.e. one more update step but return grad
-        # collect K episodes from fmeta_policy
-        # create an empty memory
-        print(f"collecting k episodes for updating fmeta_policy")
-        with higher.innerloop_ctx(self.meta_policy, optimizer, copy_initial_weights=False) as (fmeta_policy, diffopt):
-            for n_adapt in range(self.N):
-                print(f"updating fmeta policy {n_adapt+1}/{self.N}")
-                memory = Memory()
-                # create reward list for this roolout
-                reward_list = []  # this reward_list seems to be useless
-                rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size = self.rollout(
-                    memory, reward_list, continuous, temp_policy=fmeta_policy)  # also collect it from fmeta_policy
-                prev_return = 0
-                prev_value = 0
-                prev_advantage = 0
-                # calculate advantages
-                for i in reversed(range(batch_size)):
-                    returns[i] = rewards[i] + self.gamma * prev_return * masks[i]
-                    deltas[i] = rewards[i] + self.gamma * prev_value * masks[i] - values[i]
-                    advantages[i] = deltas[i] + self.gamma * self.lamda * prev_advantage * masks[i]
-                    prev_return = returns[i]
-                    prev_value = values[i]
-                    prev_advantage = advantages[i]
-                if self.advantage_norm:
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
-                for i_epoch in range(int(batch_size / self.mini_batch_size)):
-                    minibatch_ind = np.random.choice(batch_size, self.mini_batch_size, replace=False)
-                    minibatch_states = states[minibatch_ind].float()
-                    minibatch_actions = actions[minibatch_ind].float()
-                    minibatch_oldlogproba = oldlogproba[minibatch_ind]
-                    minibatch_advantages = advantages[minibatch_ind]
-                    minibatch_returns = returns[minibatch_ind]
-                    minibatch_newlogproba, minibatch_newvalues, loss_entropy = fmeta_policy.evaluate(
-                        minibatch_states, minibatch_actions)  # probably need to set to self.fmeta_policy
-                    ratio = torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
-                    surr1 = ratio * minibatch_advantages
-                    surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages
-                    loss_surr = -torch.mean(torch.min(surr1, surr2))
-                    if self.lossvalue_norm:
-                        minibatch_return_6std = 6 * minibatch_returns.std()
-                        loss_value = torch.mean(
-                            (minibatch_newvalues - minibatch_returns).pow(2)) / minibatch_return_6std
-                    else:
-                        loss_value = torch.mean((minibatch_newvalues - minibatch_returns).pow(2))
-
-                    loss = loss_surr + self.loss_coeff_value * loss_value + self.loss_coeff_entropy * loss_entropy
-                    diffopt.step(loss)
-
-            print('validating fmeta_policy!')
-            memory = Memory()
-            # create reward list for this roolout
-            reward_list = []  # this reward_list seems to be useless
-            print("collecting K episodes from updated fmeta_policy")
-            rewards, values, masks, actions, states, oldlogproba, returns, deltas, advantages, batch_size = self.rollout(
-                memory, reward_list, continuous, temp_policy=fmeta_policy)  # also collect it from fmeta_policy
-            print(f"the average_rewards of validation step is {np.mean(np.array(reward_list))}")
-            prev_return = 0
-            prev_value = 0
-            prev_advantage = 0
-            # calculate advantages
-            for i in reversed(range(batch_size)):
-                returns[i] = rewards[i] + self.gamma * prev_return * masks[i]
-                deltas[i] = rewards[i] + self.gamma * prev_value * masks[i] - values[i]
-                advantages[i] = deltas[i] + self.gamma * self.lamda * prev_advantage * masks[i]
-                prev_return = returns[i]
-                prev_value = values[i]
-                prev_advantage = advantages[i]
-            if self.advantage_norm:
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
-
-            print("updating fmeta_policy")
-            newlogproba, newvalues, loss_entropy = fmeta_policy.evaluate(
-                states, actions)  # probably need to set to self.fmeta_policy
-            ratio = torch.exp(newlogproba - oldlogproba)
-            surr1 = ratio * advantages
-            surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * advantages
-            loss_surr = -torch.mean(torch.min(surr1, surr2))
-            if self.lossvalue_norm:
-                return_6std = 6 * returns.std()
-                loss_value = torch.mean(
-                    (newvalues - returns).pow(2)) / return_6std
-            else:
-                loss_value = torch.mean((newvalues - returns).pow(2))
-
-            loss = loss_surr + self.loss_coeff_value * loss_value + self.loss_coeff_entropy * loss_entropy
-        return np.mean(np.array(reward_list)),loss
 
         # update fmeta_policy if it is not validation, return grad if it is validation
 
