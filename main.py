@@ -5,17 +5,18 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from evaluation import eval_policy
-from halfcheetah import HalfCheetahVelEnv
 from meta_ppo import MetaPPo
 from network import ActorCritic
-from ppo import PPO
 from pendulum import MetaInvertedDoublePendulum
+from ppo import PPO
+
 gym.logger.set_level(40)
 import numpy as np
 
 
 # TODO: change the distribution of test task -- training
 # TODO: test on a simple env  --traiing
+# TODO: add update_num per update
 # TODO: add reptile
 # TODO: read the paper again
 def get_args():
@@ -33,34 +34,36 @@ def get_args():
     return args
 
 
-def train(env, hyperparameters, actor_critic_model):
-    print("Training", flush=True)
-
-    model = PPO(policy_class=ActorCritic, env=env, **hyperparameters)
-
-    if actor_critic_model != '':
-        print(f"Loading in {actor_critic_model}...", flush=True)
-        model.meta_policy.load_state_dict(torch.load(actor_critic_model))
-        print(f"Successfully loaded.", flush=True)
-    else:
-        print(f"Training from scratch.", flush=True)
-
-    model.learn()
+# def train(env, hyperparameters, actor_critic_model):
+#     print("Training", flush=True)
+#
+#     model = PPO(policy_class=ActorCritic, env=env, **hyperparameters)
+#
+#     if actor_critic_model != '':
+#         print(f"Loading in {actor_critic_model}...", flush=True)
+#         model.meta_policy.load_state_dict(torch.load(actor_critic_model))
+#         print(f"Successfully loaded.", flush=True)
+#     else:
+#         print(f"Training from scratch.", flush=True)
+#
+#     model.learn()
 
 
 def main(args):
     np.random.seed(10)
     if args.mode == 'train':
-        meta_iterations = 100
+        meta_iterations = 2000
         meta_policy_lr = 3e-4
-        num_tasks = 10
+        num_tasks = 30
         env = MetaInvertedDoublePendulum()
         task_flag = True
         while task_flag == True:
-            tasks = env.sample_tasks(5, 15, num_tasks)  # gravity: 5~15 generate 10 task
+            tasks = env.sample_tasks(None, None, 100, 300, num_tasks)  # gravity: 5~15 generate 10 task
             task_flag = False
             for each in tasks:
-                if abs(each['gravity'] - 9.8) < 1.0:
+                # if abs(each['gravity'] - 9.8) < 1.0:
+                #     task_flag = True
+                if abs(each['torque_factor'] - 200) < 20:
                     task_flag = True
         print(tasks)
         obs_dim = env.observation_space.shape[0]
@@ -68,7 +71,7 @@ def main(args):
         continuous = True if type(env.action_space) == gym.spaces.box.Box else False
         print(f"obs_dim: {obs_dim}, act_dim: {act_dim}, continuous? {continuous}")
         hyperparameters = {
-            'N': 3,
+            'N': 1,
             'K': 16,
             'max_timesteps_per_episode': 200,
             'mini_batch_size': 256,
@@ -76,13 +79,15 @@ def main(args):
             'continuous': continuous,
             'gamma': 0.995,
             'lamda': 0.97,
-            'lr': 1e-2,  # inner loop lr
+            'lr': 1e-3,  # inner loop lr
             'clip': 0.2,
             'render': True,
+            'update_per_iteration':10,
         }
         # TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
         # writer = SummaryWriter('runs/T1000/S2R_N_more_epoch' + str(hyperparameters['N']) + '_task_' + str(num_tasks))
-        writer = SummaryWriter('runs/meta_train/' +str(args.save_name) +'_as_' + str(hyperparameters['N']) + '_task_' + str(num_tasks))
+        writer = SummaryWriter(
+            'runs/meta_train/' + str(args.save_name) + '_as_' + str(hyperparameters['N']) + '_task_' + str(num_tasks))
         meta_policy = ActorCritic(obs_dim, act_dim, continuous=continuous, layer_norm=True)
         outer_optimizer = torch.optim.Adam(meta_policy.parameters(), lr=meta_policy_lr)
         print(f"meta policy training begins!")
@@ -118,7 +123,7 @@ def main(args):
             #         p.copy_(p - meta_policy_lr * meta_gradient_total[i])
             # save model
             torch.save(meta_policy.state_dict(),
-                       'model/meta_model/' + str(hyperparameters['N']) + '_task_' + str(
+                       'model/meta_model/' + str(args.save_name) + '_as_' + str(hyperparameters['N']) + '_task_' + str(
                            num_tasks) + '.pth')
 
             # logging
@@ -126,9 +131,9 @@ def main(args):
             writer.add_scalar('Meta_Reward', total_reward, meta_iteration)
     elif args.mode == 'ppo_train':
         mode = args.mode
-        test_task = {'gravity': 9.8}
+        test_task = {'gravity': 9.8,'torque_factor':200}
         env = MetaInvertedDoublePendulum(task=test_task)
-        #env = gym.make('InvertedDoublePendulumMuJoCoEnv-v0')
+        # env = gym.make('InvertedDoublePendulumMuJoCoEnv-v0')
         # tasks = env.sample_tasks(num_tasks)
         # tasks = [{'velocity': 0.4}, {'velocity': 0.8}, {'velocity': 1.2}, {'velocity': 1.6}, {'velocity': 2.0}]
         obs_dim = env.observation_space.shape[0]
@@ -146,20 +151,21 @@ def main(args):
             'lr': 3e-4,
             'clip': 0.2,
             'render': True,
+            'update_per_iteration': 10,
         }
         policy = ActorCritic(obs_dim, act_dim, continuous=continuous, layer_norm=True)
         if args.checkpoint != '':
             checkpoint = torch.load(args.checkpoint)
             policy.load_state_dict(checkpoint)
             print('successfully load model!')
-            mode = 'meta_train'
+            mode = 'combined_train'
         else:
             print('train from new model!')
         ppo = PPO(policy, env, mode, args.save_name, **hyperparameters)
         ppo.learn()
     elif args.mode == 'test':
-        test_task = {'velocity': 1.0}
-        env = HalfCheetahVelEnv(test_task)
+        test_task = {'gravity': 9.8}
+        env = MetaInvertedDoublePendulum(task=test_task)
         # tasks = env.sample_tasks(num_tasks)
         # tasks = [{'velocity': 0.4}, {'velocity': 0.8}, {'velocity': 1.2}, {'velocity': 1.6}, {'velocity': 2.0}]
         obs_dim = env.observation_space.shape[0]

@@ -143,12 +143,14 @@ class InvertedDoublePendulum(MJCFBasedRobot):
 
 
 class MetaInvertedDoublePendulum(BaseBulletEnv):
-    def __init__(self, torque_factor=200, task=None):
+    def __init__(self, task=None):
         if task != None:
             self.gravity = task['gravity']
+            self.torque_factor = task['torque_factor']
         else:
             self.gravity = 9.8
-        self.robot = InvertedDoublePendulum(torque_factor = torque_factor)
+            self.torque_factor = 200
+        self.robot = InvertedDoublePendulum(torque_factor = self.torque_factor)
         BaseBulletEnv.__init__(self, self.robot)
         self.stateId = -1
 
@@ -179,9 +181,17 @@ class MetaInvertedDoublePendulum(BaseBulletEnv):
         self.HUD(state, a, done)
         return state, sum(self.rewards), done, {}
 
-    def sample_tasks(self, low, high, num_tasks):
-        gravities = self.np_random.uniform(low, high, size=(num_tasks,))
-        tasks = [{'gravity': gravity} for gravity in gravities]
+    def sample_tasks(self, glow=None, ghigh=None,tlow=None,thigh=None ,num_tasks=None):
+        if glow == None:
+            gravities = [9.8]*num_tasks
+        else:
+            gravities = self.np_random.uniform(glow, ghigh, size=(num_tasks,))
+        if tlow == None:
+            torque_factors = [200]*num_tasks
+        else:
+            torque_factors = self.np_random.uniform(tlow,thigh,size = (num_tasks))
+        dic = zip(gravities,torque_factors)
+        tasks = [{'gravity': gravity,'torque_factor':torque_factor} for gravity,torque_factor in dic]
         return tasks
 
     def camera_adjust(self, i=0, j=1.2, k=1.0, x=0, y=0, z=0.5):
@@ -191,14 +201,14 @@ class MetaInvertedDoublePendulum(BaseBulletEnv):
 if __name__ == '__main__':
     # env = gym.make('InvertedDoublePendulumMuJoCoEnv-v0')
     # env = gym.make('InvertedPendulumMuJoCoEnv-v1')
-    task = {"gravity": 0}
-    env = MetaInvertedDoublePendulum(torque_factor=200,task=task)
+    task = {"gravity": 9.8}
+    env = MetaInvertedDoublePendulum(torque_factor=10000,task=task)
     env.render('human')  # call this before env.reset, if you want a window showing the environment
     state = env.reset()  # should return a state vector if everything worked
     for _ in range(1000):
         # env.camera_adjust(i=0,j=1.2,k=1.0,x=5, y=0, z=0.5)
         act = env.action_space.sample()  # 在动作空间中随机采样
         obs, reward, done, _ = env.step(act)  # 与环境交互
-        sleep(1 / 240)
+        sleep(1 / 100)
 
     env.close()
