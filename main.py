@@ -54,15 +54,15 @@ def main(args):
     if args.mode == 'train':
         meta_iterations = 2000
         meta_policy_lr = 3e-4
-        num_tasks = 30
+        num_tasks = 20
         env = MetaInvertedDoublePendulum()
         task_flag = True
         while task_flag == True:
-            tasks = env.sample_tasks(None, None, 100, 300, num_tasks)  # gravity: 5~15 generate 10 task
+            tasks = env.sample_tasks(5, 15, 100, 300, num_tasks)  # gravity: 5~15 generate 10 task
             task_flag = False
             for each in tasks:
-                # if abs(each['gravity'] - 9.8) < 1.0:
-                #     task_flag = True
+                if abs(each['gravity'] - 9.8) < 1.0:
+                    task_flag = True
                 if abs(each['torque_factor'] - 200) < 20:
                     task_flag = True
         print(tasks)

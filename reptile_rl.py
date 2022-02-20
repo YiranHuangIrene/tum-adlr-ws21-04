@@ -43,15 +43,15 @@ if __name__ == '__main__':
     np.random.seed(10)
     args = get_args()
     meta_iterations = 1000
-    num_tasks = 10
+    num_tasks = 20
     env = MetaInvertedDoublePendulum()
     task_flag = True
     while task_flag == True:
-        tasks = env.sample_tasks(None, None, 100, 300, num_tasks)  # gravity: 5~15 generate 10 task
+        tasks = env.sample_tasks(5, 15, 100, 300, num_tasks)  # gravity: 5~15 generate 10 task
         task_flag = False
         for each in tasks:
-            # if abs(each['gravity'] - 9.8) < 1.0:
-            #     task_flag = True
+            if abs(each['gravity'] - 9.8) < 1.0:
+                task_flag = True
             if abs(each['torque_factor'] - 200) < 20:
                 task_flag = True
     print(tasks)
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     continuous = True if type(env.action_space) == gym.spaces.box.Box else False
     print(f"obs_dim: {obs_dim}, act_dim: {act_dim}, continuous? {continuous}")
     hyperparameters = {
-        'N': 1,
+        'N': 5,
         'K': 16,
         'max_timesteps_per_episode': 200,
         'mini_batch_size': 256,

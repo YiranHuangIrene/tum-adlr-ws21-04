@@ -22,7 +22,7 @@ class MetaPPo:
             self.act_dim = env.action_space.shape[0]
         else:
             self.act_dim = env.action_space.n
-        #self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = 'cpu'
         print(f"using {self.device}!")
         # self.device = 'cpu'
@@ -62,6 +62,7 @@ class MetaPPo:
         self.schedule_clip = 'linear'
         self.loss_coeff_value = 0.5
         self.loss_coeff_entropy = 0.01
+        self.update_per_iteration = 10
         self.continuous = True
         # Change any default values to custom values for specified hyperparameters
         for param, val in hyperparameters.items():
@@ -180,7 +181,7 @@ class MetaPPo:
                     prev_advantage = advantages[i]
                 if self.advantage_norm:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-9)
-                for i_epoch in range(int(batch_size / self.mini_batch_size)):
+                for i_epoch in range(int(self.update_per_iteration * batch_size / self.mini_batch_size)):
                     minibatch_ind = np.random.choice(batch_size, self.mini_batch_size, replace=False)
                     minibatch_states = states[minibatch_ind].float()
                     minibatch_actions = actions[minibatch_ind].float()
@@ -241,52 +242,6 @@ class MetaPPo:
 
             loss = loss_surr + self.loss_coeff_value * loss_value + self.loss_coeff_entropy * loss_entropy
         return np.mean(np.array(reward_list)), loss
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     def maml_learn(self):
         """
